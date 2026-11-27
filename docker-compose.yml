@@ -1,0 +1,13 @@
+services:
+  subspace-workbench:
+    build: .
+    container_name: subspace-protocols-workbench
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKBENCH_PASSCODE=${WORKBENCH_PASSCODE:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persists your authored writing JSON & claimed passcode hash on your Rocky Linux host
+      - ./data:/app/data

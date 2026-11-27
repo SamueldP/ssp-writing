@@ -1,0 +1,6 @@
+{
+  "name": "Subspace Protocols — Writing Workbench",
+  "description": "Offline writing workbench and sector star chart editor for Subspace Protocols, a 28-day bureaucratic sci-fi inspection campaign at Void Gate 3.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
