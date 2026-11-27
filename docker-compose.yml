@@ -1,13 +1,19 @@
 services:
   subspace-workbench:
     build: .
+    pull_policy: build
     container_name: subspace-protocols-workbench
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - WORKBENCH_PASSCODE=${WORKBENCH_PASSCODE:-}
     ports:
-      - "3000:3000"
+      # Maps host port 6680 (or override with HOST_PORT in Portainer) to container port 3000.
+      # Note: Browsers block port 6666 (ERR_UNSAFE_PORT / IRC), while 6680 works everywhere and via NPM.
+      - "${HOST_PORT:-6680}:3000"
     volumes:
-      # Persists your authored writing JSON & claimed passcode hash on your Rocky Linux host
-      - ./data:/app/data
+      # Named Docker volume so your authored writing JSON & passcode hash persist across Portainer Git rebuilds
+      - ssp_writing_data:/app/data
+
+volumes:
+  ssp_writing_data:

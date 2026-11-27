@@ -12,7 +12,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const BASE_DATA_DIR = path.resolve(__dirname, 'data');
 const STATE_FILENAME = 'workbench_state.json';
 const AUTH_FILENAME = 'workbench_auth.json';
