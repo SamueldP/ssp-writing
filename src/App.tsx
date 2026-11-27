@@ -7,13 +7,15 @@ import {
   ChevronDown,
   ChevronRight,
   Edit3,
-  Lock
+  Lock,
+  FileCheck2
 } from 'lucide-react';
 import {
   STORAGE_KEY_V1,
   STORAGE_KEY_V2,
   FACTIONS,
   EXCUSE_KEYS,
+  FACTION_POOL_TOKENS,
   FORUM_VARIABLES,
   FORUM_STAGES,
   FORUM_PILLARS,
@@ -35,12 +37,22 @@ import {
   calcAllStats,
   buildFactionPoolsExport,
   applyImportedFactionPools,
+  buildForumDatabaseExport,
+  buildCovertMissionsExport,
   buildCorridorPostersExport,
   buildCorridorBarksExport,
   buildSectorMapExport,
   collectUnfinishedTargets
 } from './utils/workbenchLogic';
-import { StatusLabel, RaylibTextarea } from './components/WorkbenchControls';
+import {
+  StatusLabel,
+  SourceBadge,
+  InGameContextStrip,
+  CurrentlyInGameBox,
+  EncounterFlowReferencePanel,
+  RaylibTextarea
+} from './components/WorkbenchControls';
+import { getFactionCardAuditDetails } from './utils/auditReferenceData';
 import { ExportModal, FindReplaceModal, downloadFile } from './components/Modals';
 import { downloadStandaloneOfflineHtml } from './utils/standaloneHtmlBuilder';
 
@@ -97,6 +109,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportModalInitialView, setExportModalInitialView] = useState<'exports' | 'audit'>('exports');
   const [findReplaceModalOpen, setFindReplaceModalOpen] = useState(false);
   const [manageHandlesOpen, setManageHandlesOpen] = useState(false);
   const [newHandleInput, setNewHandleInput] = useState('');
@@ -156,7 +169,8 @@ export default function App() {
           const serverState = migrateState(data.state);
           const serverStats = calcAllStats(serverState);
           const localStats = calcAllStats(state);
-          if (localStats.words > serverStats.words && serverStats.words <= 676) {
+          const defaultStats = calcAllStats(buildDefaultState());
+          if (localStats.words > serverStats.words && serverStats.words <= defaultStats.words) {
             hasHydratedFromServerRef.current = true;
             fetch('/api/state', {
               method: 'PUT',
@@ -539,13 +553,14 @@ export default function App() {
       categoryLabel: string,
       hint: string,
       arr: string[],
-      softLimit = 180
+      softLimit = 140
     ) => {
       const cardId = `fp_${activeCode}_${arrKey}`;
       const status = getFactionCardStatus(arr, doneFlags[arrKey]);
       const filledCount = arr.filter(hasText).length;
       const firstPreview = arr.find(hasText);
-      const blob = `${activeCode} ${fMeta.name} ${title} ${dayBadge} ${categoryLabel} ${hint} ${arr.join(' ')}`;
+      const audit = getFactionCardAuditDetails(activeCode, arrKey);
+      const blob = `${activeCode} ${fMeta.name} ${title} ${dayBadge} ${categoryLabel} ${hint} ${audit.currentlyInGame} ${audit.currentSource} ${arr.join(' ')}`;
 
       if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
       const expanded = isCardExpanded(cardId);
@@ -562,7 +577,7 @@ export default function App() {
             onClick={() => toggleCard(cardId)}
             className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
           >
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
               {expanded ? (
                 <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
               ) : (
@@ -573,8 +588,9 @@ export default function App() {
                 {dayBadge} · {filledCount}/{arr.length}
               </span>
               <StatusLabel status={status} />
+              <SourceBadge badge={audit.badge} />
               {!expanded && firstPreview && (
-                <span className="font-mono text-[11px] text-[#8492a6] truncate hidden md:inline ml-2 italic">
+                <span className="font-mono text-[11px] text-[#8492a6] truncate hidden xl:inline ml-1 italic max-w-xs">
                   &ldquo;{firstPreview}&rdquo;
                 </span>
               )}
@@ -603,8 +619,19 @@ export default function App() {
           </div>
 
           {expanded && (
-            <div className="px-4 pb-3.5 pt-2 border-t border-[#1e2633] space-y-2.5">
+            <div className="px-4 pb-3.5 pt-2.5 border-t border-[#1e2633] space-y-2.5">
               <p className="text-xs text-[#8492a6]">{hint}</p>
+
+              {/* Section 1: In-Game Context Strip (BEFORE -> THIS LINE -> AFTER) */}
+              <InGameContextStrip flow={audit.contextFlow} />
+
+              {/* Section 3: Currently In Game Verbatim Reference Box */}
+              <CurrentlyInGameBox
+                text={audit.currentlyInGame}
+                source={audit.currentSource}
+                badge={audit.badge}
+              />
+
               {arr.map((val, idx) => (
                 <div key={idx} className="flex items-start gap-2">
                   <span className="font-mono text-[11px] text-[#5a6678] pt-2 w-5 shrink-0 tabular-nums">
@@ -614,10 +641,11 @@ export default function App() {
                     <RaylibTextarea
                       value={val}
                       rows={2}
+                      raylibPreset="comms_line"
                       softLimit={softLimit}
-                      limitLabel="Faction Comms Line"
+                      limitLabel="CRT Comms Dialogue Box (334px)"
                       ariaLabel={`${activeCode} ${title} line ${idx + 1}`}
-                      placeholder={`Write ${activeCode} variation #${idx + 1} (blank exports as "[TODO]")...`}
+                      placeholder={`Write ${activeCode} variation #${idx + 1} (blank exports as "[TODO]" in faction_pools.json)...`}
                       onFocus={el => { lastFocusedTextareaRef.current = el; }}
                       onChange={v => updateLine(arrKey, idx, v)}
                     />
@@ -642,6 +670,8 @@ export default function App() {
 
     const displayName = fMeta.code === 'BMC-' ? `${state.meta.corpName} Mercantile Consortium` : fMeta.name;
     const showAllSections = factionSection === 'all' || searchQuery.trim().length > 0;
+    const liveJsonExcuseKeys = EXCUSE_KEYS.filter(ek => ek.inFactionPoolsJson);
+    const nonJsonExcuseKeys = EXCUSE_KEYS.filter(ek => !ek.inFactionPoolsJson);
 
     return (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
@@ -663,10 +693,13 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
-                  downloadFile('faction_pools.json', JSON.stringify(buildFactionPoolsExport(state), null, 2));
-                  showToast('Exported faction_pools.json');
+                  downloadFile(
+                    'faction_pools.json',
+                    JSON.stringify(buildFactionPoolsExport(state, { strictCSharpSchema: true }), null, 2)
+                  );
+                  showToast('Exported 1-to-1 C# faction_pools.json');
                 }}
-                title="Export faction_pools.json"
+                title="Export 1-to-1 C# data/dialogue/faction_pools.json"
                 className="px-1.5 py-0.5 bg-[#4cc9c0]/15 border border-[#4cc9c0]/60 font-mono text-[10px] font-bold text-[#4cc9c0] hover:bg-[#4cc9c0] hover:text-[#0b0e13] cursor-pointer"
               >
                 EXPORT
@@ -679,6 +712,7 @@ export default function App() {
               const st = calcFactionStats(state, f.code);
               const isSelected = f.code === activeCode;
               const fName = f.code === 'BMC-' ? `${state.meta.corpName} Mercantile Consortium` : f.name;
+              const isAuthoredInRepo = f.code === 'FTV-' || f.code === 'MNG-';
               return (
                 <button
                   key={f.code}
@@ -698,17 +732,27 @@ export default function App() {
                       <span className="text-[11px] text-[#8492a6] truncate">{fName}</span>
                     </div>
                   </div>
-                  <span
-                    className={`font-mono text-[10px] tabular-nums shrink-0 ${
-                      st.done === st.total
-                        ? 'text-[#52b778] font-bold'
-                        : st.done > 0 || st.draft > 0
-                        ? 'text-[#e5a03c]'
-                        : 'text-[#5a6678]'
-                    }`}
-                  >
-                    {st.done}/{st.total}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isAuthoredInRepo && (
+                      <span
+                        title="19 lines authored in live data/dialogue/faction_pools.json"
+                        className="px-1 py-0.2 bg-[#52b778]/15 border border-[#52b778]/50 font-mono text-[9px] text-[#52b778]"
+                      >
+                        LIVE
+                      </span>
+                    )}
+                    <span
+                      className={`font-mono text-[10px] tabular-nums shrink-0 ${
+                        st.done === st.total
+                          ? 'text-[#52b778] font-bold'
+                          : st.done > 0 || st.draft > 0
+                          ? 'text-[#e5a03c]'
+                          : 'text-[#5a6678]'
+                      }`}
+                    >
+                      {st.done}/{st.total}
+                    </span>
+                  </div>
                 </button>
               );
             })}
@@ -716,8 +760,11 @@ export default function App() {
         </aside>
 
         {/* Right Main Panel: Selected Faction Editor */}
-        <div className="lg:col-span-9 space-y-4">
-          {/* Active Faction Header & Section Filter */}
+        <div className="lg:col-span-9 space-y-3.5">
+          {/* Section 1 Collapsible Turn-by-Turn Encounter Script Flow Reference */}
+          <EncounterFlowReferencePanel />
+
+          {/* Active Faction Header, Token Chips & Section Filter */}
           <div className="bg-[#121720] border border-[#222b38] p-4 space-y-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <div>
@@ -728,13 +775,34 @@ export default function App() {
               </div>
             </div>
 
-            {/* Clean Category Sub-Tabs so all 19 cards don't pile up unless requested */}
+            {/* Active C# Runtime Token Chips (DialogueSystem.cs:111-119) */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#1e2633]">
+              <span className="font-mono text-[10px] font-bold text-[#52b778] uppercase tracking-wider mr-1">
+                C# RUNTIME TOKENS (DialogueSystem.cs:111-119):
+              </span>
+              {FACTION_POOL_TOKENS.map(tok => (
+                <button
+                  key={tok}
+                  type="button"
+                  onClick={() => insertTokenIntoForum(tok)}
+                  title="Click to insert token into the last focused Faction Pool textarea"
+                  className="px-2 py-0.5 bg-[#0b0e13] border border-[#52b778]/50 font-mono text-[11px] text-[#52b778] hover:bg-[#52b778] hover:text-[#0b0e13] cursor-pointer"
+                >
+                  {tok}
+                </button>
+              ))}
+              <span className="font-mono text-[10px] text-[#64748b] ml-1">
+                (Click inside any line below, then click a token to insert)
+              </span>
+            </div>
+
+            {/* Clean Category Sub-Tabs */}
             <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#1e2633]">
               {([
                 { id: 'greetings', label: 'Arrival Greetings (3)' },
-                { id: 'excuses', label: 'Protocol Excuses (12)' },
+                { id: 'excuses', label: 'Protocol Excuses (9 JSON + 9 C#/Future)' },
                 { id: 'detention', label: 'Detention & Callbacks (4)' },
-                { id: 'all', label: 'Show All (19)' }
+                { id: 'all', label: 'Show All (25)' }
               ] as const).map(sec => (
                 <button
                   key={sec.id}
@@ -756,14 +824,14 @@ export default function App() {
           {(showAllSections || factionSection === 'greetings') && (
             <div className="space-y-2">
               <div className="font-mono text-[11px] font-bold text-[#8492a6] uppercase tracking-wider px-1">
-                Arrival Greetings — All 3 Reputation Tiers ({activeCode})
+                Arrival Greetings — Neutral (Live JSON) + Reputation Tiers ({activeCode})
               </div>
               {renderPoolCard(
                 'greetings',
                 `${activeCode} Neutral Arrival Greetings`,
                 'Day 1+',
                 'Standard Comms',
-                'Write 2–3 standard arrival greetings so consecutive vessels from this registry never repeat verbatim.',
+                'Live in faction_pools.json under greetings[]. Selected by DialogueSystem.SelectArrivalGreeting when no recentCallbacks trigger.',
                 pool.greetings
               )}
               {renderPoolCard(
@@ -771,7 +839,7 @@ export default function App() {
                 `${activeCode} Low-Rep Hostile Greetings (rep <= -5)`,
                 'Day 1+',
                 'Reputation Tier: Hostile',
-                'Exported in faction_pools.json under greetingsHostile. Used when faction standing drops to -5 or lower.',
+                'Not yet wired in C# FactionDialoguePool class (rep only biases callback chance 25%..65%). Excluded from strict 1-to-1 C# JSON export until wired.',
                 pool.greetingsHostile
               )}
               {renderPoolCard(
@@ -779,28 +847,46 @@ export default function App() {
                 `${activeCode} High-Rep Warm Greetings (rep >= +6)`,
                 'Day 1+',
                 'Reputation Tier: Warm',
-                'Exported in faction_pools.json under greetingsWarm. Used when faction standing rises to +6 or higher.',
+                'Not yet wired in C# FactionDialoguePool class. Excluded from strict 1-to-1 C# JSON export until wired.',
                 pool.greetingsWarm
               )}
             </div>
           )}
 
-          {/* Section 2: All 12 Excuse Types Across 28 Days */}
+          {/* Section 2: All 18 Excuse Types (9 Live JSON + 6 Hardcoded C# + 3 Future Enum) */}
           {(showAllSections || factionSection === 'excuses') && (
-            <div className="space-y-2">
-              <div className="font-mono text-[11px] font-bold text-[#8492a6] uppercase tracking-wider px-1">
-                Protocol Review Discrepancy Excuses — Days 1–24 ({activeCode})
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <div className="font-mono text-[11px] font-bold text-[#52b778] uppercase tracking-wider px-1">
+                  Live JSON Protocol Review Excuses — 9 Exact Keys in data/dialogue/faction_pools.json ({activeCode})
+                </div>
+                {liveJsonExcuseKeys.map(ek =>
+                  renderPoolCard(
+                    `excuses.${ek.key}`,
+                    ek.label,
+                    ek.day,
+                    ek.system,
+                    `Captain deflection when challenged for ${ek.key} during Protocol Review. Exported in strict 1-to-1 faction_pools.json.`,
+                    pool.excuses[ek.key] || ['']
+                  )
+                )}
               </div>
-              {EXCUSE_KEYS.map(ek =>
-                renderPoolCard(
-                  `excuses.${ek.key}`,
-                  ek.label,
-                  ek.day,
-                  ek.system,
-                  `Captain deflection or plea when flagged for ${ek.key} during Protocol Review.`,
-                  pool.excuses[ek.key] || ['']
-                )
-              )}
+
+              <div className="space-y-2 pt-2">
+                <div className="font-mono text-[11px] font-bold text-[#e5a03c] uppercase tracking-wider px-1">
+                  C#-Hardcoded & Future Enum Excuse Keys — 6 Active in ShipGenerator.cs + 3 Future Enum Keys ({activeCode})
+                </div>
+                {nonJsonExcuseKeys.map(ek =>
+                  renderPoolCard(
+                    `excuses.${ek.key}`,
+                    ek.label,
+                    ek.day,
+                    ek.system,
+                    `Currently falls back to ShipGenerator.cs:1085-1127 because "${ek.key}" is absent from faction_pools.json. Excluded from strict 1-to-1 JSON export unless full workbench schema is selected.`,
+                    pool.excuses[ek.key] || ['']
+                  )
+                )}
+              </div>
             </div>
           )}
 
@@ -823,7 +909,7 @@ export default function App() {
                 'Recent Callback — Cleared a Violation (Last 2–3 Shifts)',
                 'Day 1+',
                 'Rolling Memory',
-                'Atmospheric callback referencing faction + recent leniency (no random captain names or hull IDs).',
+                'Atmospheric callback referencing faction + recent leniency (replaces greeting when 25%..65% roll succeeds).',
                 pool.recentCallbacks.ClearedViolation
               )}
               {renderPoolCard(
@@ -839,7 +925,7 @@ export default function App() {
                 'Recent Callback — Accepted a Subspace Bribe (Last 2–3 Shifts)',
                 'Day 18+',
                 'Rolling Memory',
-                'Subtle gossip hint that Booth 04 is willing to look the other way for 30–50 SC.',
+                'Subtle gossip hint that Booth 04 is willing to look the other way for 25–40 SC.',
                 pool.recentCallbacks.TookBribe
               )}
             </div>
@@ -889,8 +975,10 @@ export default function App() {
       const visibleCards = entries
         .map(({ item, index }) => {
           const status = getStructuredItemStatus(item);
-          const blob = `${item.title} ${item.day} ${item.category} ${item.hint} ${item.context || ''} ${item.fields
-            .map(f => `${f.label} ${f.value}`)
+          const blob = `${item.title} ${item.day} ${item.category} ${item.hint} ${item.context || ''} ${
+            item.currentlyInGame || ''
+          } ${item.currentSource || ''} ${item.fields
+            .map(f => `${f.label} ${f.value} ${f.currentlyInGame || ''} ${f.currentSource || ''}`)
             .join(' ')}`;
           if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
 
@@ -909,7 +997,7 @@ export default function App() {
                 onClick={() => toggleCard(cardId)}
                 className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
               >
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                   {expanded ? (
                     <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
                   ) : (
@@ -921,6 +1009,7 @@ export default function App() {
                     · {item.category}
                   </span>
                   <StatusLabel status={status} />
+                  <SourceBadge badge={item.sourceBadge} />
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
@@ -948,9 +1037,37 @@ export default function App() {
                       <strong className="font-mono text-[#e5a03c]">CONTEXT:</strong> {item.context}
                     </div>
                   )}
+
+                  {/* Section 1: In-Game Context Strip */}
+                  <InGameContextStrip flow={item.inGameContext} />
+
+                  {/* Section 3: Item-Level Currently In Game Reference */}
+                  <CurrentlyInGameBox
+                    text={item.currentlyInGame}
+                    source={item.currentSource}
+                    badge={item.sourceBadge}
+                  />
+
                   {item.fields.map((f, fIdx) => (
-                    <div key={f.key} className="space-y-1">
-                      <label className="block font-mono text-[11px] text-[#94a3b8]">{f.label}</label>
+                    <div key={f.key} className="space-y-1.5 bg-[#0f141d] border border-[#1e2633] p-2.5">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <label className="block font-mono text-[11px] font-bold text-[#cbd5e1]">{f.label}</label>
+                        {f.sourceBadge && <SourceBadge badge={f.sourceBadge} />}
+                      </div>
+
+                      {f.inGameContext && <InGameContextStrip flow={f.inGameContext} />}
+
+                      <CurrentlyInGameBox
+                        text={f.currentlyInGame}
+                        source={f.currentSource || item.currentSource}
+                        badge={f.sourceBadge || item.sourceBadge}
+                        onCopyToEditor={
+                          !item.locked && f.currentlyInGame && !f.currentlyInGame.startsWith('(')
+                            ? () => updateField(index, fIdx, f.currentlyInGame!.replace(/^"|"$/g, ''))
+                            : undefined
+                        }
+                      />
+
                       <RaylibTextarea
                         value={f.value}
                         readOnly={!!item.locked}
@@ -959,6 +1076,7 @@ export default function App() {
                             ? Math.min(8, f.value.split('\n').length + 1)
                             : 3
                         }
+                        raylibPreset={f.raylibPreset || item.raylibPreset || 'comms_line'}
                         softLimit={f.softLimit ?? defaultSoftLimit}
                         limitLabel="Standard Hail / Directive"
                         ariaLabel={`${item.title} - ${f.label}`}
@@ -1010,7 +1128,7 @@ export default function App() {
             2. HAILS, DIRECTIVES & DESK SYSTEMS (28-DAY UNIFIED TIMELINE)
           </h2>
           <p className="text-xs text-[#8492a6] mt-0.5">
-            Click any card row to expand and edit its dialogue beats. Locked Day 1 cards are read-only reference.
+            Click any card row to expand and edit its dialogue beats. Each card shows its exact in-game C# or JSON source, surrounding encounter beats, and verbatim <code className="text-[#e5a03c]">CURRENTLY IN GAME</code> reference text.
           </p>
         </div>
       </div>
@@ -1087,16 +1205,28 @@ export default function App() {
               3. QUARTERS FORUM ANCHOR POSTS (4 TENSION STAGES & 4 LORE PILLARS)
             </h2>
             <p className="text-xs text-[#8492a6] mt-0.5">
-              Click any variable or station handle chip below to insert it into the active post textarea.
+              Includes the 14 live <code className="text-[#52b778]">data/forum.json</code> threads (21 posts) plus 18 campaign stage anchor slots.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={addForumThread}
-            className="px-3 py-1.5 bg-[#e5a03c]/15 border border-[#e5a03c] font-mono text-xs font-bold text-[#e5a03c] hover:bg-[#e5a03c] hover:text-[#0b0e13] cursor-pointer whitespace-nowrap"
-          >
-            + ADD FORUM THREAD
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                downloadFile('forum.json', JSON.stringify(buildForumDatabaseExport(state), null, 2));
+                showToast('Exported 1-to-1 C# data/forum.json');
+              }}
+              className="px-3 py-1.5 bg-[#52b778]/15 border border-[#52b778] font-mono text-xs font-bold text-[#52b778] hover:bg-[#52b778] hover:text-[#0b0e13] cursor-pointer whitespace-nowrap"
+            >
+              EXPORT forum.json (1-TO-1 C#)
+            </button>
+            <button
+              type="button"
+              onClick={addForumThread}
+              className="px-3 py-1.5 bg-[#e5a03c]/15 border border-[#e5a03c] font-mono text-xs font-bold text-[#e5a03c] hover:bg-[#e5a03c] hover:text-[#0b0e13] cursor-pointer whitespace-nowrap"
+            >
+              + ADD FORUM THREAD
+            </button>
+          </div>
         </div>
 
         {/* Clickable Variables & Recurring Station Handle Chips */}
@@ -1113,6 +1243,13 @@ export default function App() {
                 {v}
               </button>
             ))}
+            <SourceBadge
+              badge={{
+                kind: 'NOT_WIRED',
+                label: 'NOT WIRED IN C# YET',
+                location: 'TerminalOverlay.cs renders forum.json literally without variable substitution'
+              }}
+            />
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#1e2633]">
@@ -1186,11 +1323,12 @@ export default function App() {
           const visibleCards = stageEntries
             .map(({ t, idx }) => {
               const status = getForumThreadStatus(t);
-              const blob = `${t.title} ${t.stage} ${t.pillar} ${t.body}`;
+              const blob = `${t.title} ${t.stage} ${t.pillar} ${t.body} ${t.currentlyInGame || ''} ${t.currentSource || ''}`;
               if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
 
               const cardId = `forum_${t.id}`;
               const expanded = isCardExpanded(cardId);
+              const titleOverLimit = t.title.length > 68;
 
               return (
                 <div
@@ -1204,7 +1342,7 @@ export default function App() {
                     onClick={() => toggleCard(cardId)}
                     className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                       {expanded ? (
                         <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
                       ) : (
@@ -1216,7 +1354,13 @@ export default function App() {
                       <span className="font-mono text-[11px] text-[#64748b] whitespace-nowrap">
                         · {t.pillar}
                       </span>
+                      {t.minDay !== undefined && (
+                        <span className="font-mono text-[10.5px] text-[#e5a03c] whitespace-nowrap">
+                          · Unlock Day {t.minDay}
+                        </span>
+                      )}
                       <StatusLabel status={status} />
+                      <SourceBadge badge={t.sourceBadge} />
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                       <button
@@ -1246,14 +1390,26 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div>
                           <label className="block font-mono text-[11px] text-[#8492a6] mb-1">
-                            Thread Title / Subject
+                            Thread Title / Subject (Left Index Pane: 332px)
                           </label>
                           <input
                             type="text"
                             value={t.title}
                             onChange={e => updateForum(idx, 'title', e.target.value)}
-                            className="w-full bg-[#0b0e13] border border-[#263040] px-2.5 py-1.5 font-mono text-xs text-[#d8dee9] focus:border-[#e5a03c] focus:outline-none"
+                            className={`w-full bg-[#0b0e13] border px-2.5 py-1.5 font-mono text-xs text-[#d8dee9] focus:outline-none ${
+                              titleOverLimit
+                                ? 'border-[#e5a03c] focus:border-[#e5a03c]'
+                                : 'border-[#263040] focus:border-[#e5a03c]'
+                            }`}
                           />
+                          <div
+                            className={`font-mono text-[10px] mt-1 ${
+                              titleOverLimit ? 'text-[#e5a03c] font-bold' : 'text-[#5a6678]'
+                            }`}
+                          >
+                            {t.title.length} / 68 chars · Left index max 2 lines (34 chars/line @ +3)
+                            {titleOverLimit ? ' [!] CLIPS LEFT INDEX CARD' : ''}
+                          </div>
                         </div>
                         <div>
                           <label className="block font-mono text-[11px] text-[#8492a6] mb-1">
@@ -1289,13 +1445,26 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Section 3: Verbatim Currently In Game Box */}
+                      <CurrentlyInGameBox
+                        text={t.currentlyInGame}
+                        source={t.currentSource}
+                        badge={t.sourceBadge}
+                        onCopyToEditor={
+                          t.currentlyInGame && !t.currentlyInGame.startsWith('(')
+                            ? () => updateForum(idx, 'body', t.currentlyInGame!)
+                            : undefined
+                        }
+                      />
+
                       <div>
                         <label className="block font-mono text-[11px] text-[#8492a6] mb-1">
-                          Thread Post & Replies (Format: [Handle]: Post text)
+                          Thread Post & Replies (Format: [Handle]: Post text — exports 1-to-1 to data/forum.json posts[])
                         </label>
                         <RaylibTextarea
                           value={t.body}
                           rows={4}
+                          raylibPreset="forum_body"
                           ariaLabel={`Forum post body for ${t.title}`}
                           placeholder={`[D4_Wrench]: Write grounded station chatter here...\n[ShiftLead_R]: Reply here...`}
                           onFocus={el => { lastFocusedTextareaRef.current = el; }}
@@ -1358,9 +1527,10 @@ export default function App() {
         status: 'KEEP',
         done: false,
         hint: 'Describe the visual trademark, setup visits, and mechanical payoff.',
+        sourceBadge: { kind: 'NOT_WIRED', label: 'NOT WIRED IN C# YET', location: 'Custom Quest Card' },
         fields: [
-          { key: 'beat_1', label: 'Setup Visit / Arrival Comms', value: '' },
-          { key: 'beat_2', label: 'Payoff / Resolution Beat', value: '' }
+          { key: 'beat_1', label: 'Setup Visit / Arrival Comms', value: '', raylibPreset: 'comms_line' },
+          { key: 'beat_2', label: 'Payoff / Resolution Beat', value: '', raylibPreset: 'comms_line' }
         ]
       };
       setState(prev => ({
@@ -1411,7 +1581,12 @@ export default function App() {
             ...q,
             fields: [
               ...q.fields,
-              { key: `beat_${Date.now()}_${nextNum}`, label: `Beat ${nextNum} — Dialogue / Note`, value: '' }
+              {
+                key: `beat_${Date.now()}_${nextNum}`,
+                label: `Beat ${nextNum} — Dialogue / Note`,
+                value: '',
+                raylibPreset: 'comms_line'
+              }
             ]
           };
         })
@@ -1441,9 +1616,9 @@ export default function App() {
 
     const renderQuestCard = (q: QuestItem) => {
       const status = getStructuredItemStatus(q);
-      const blob = `${q.title} ${q.day} Day ${q.sortDay} ${q.category} ${q.hint} ${q.fields
-        .map(f => `${f.label} ${f.value}`)
-        .join(' ')}`;
+      const blob = `${q.title} ${q.day} Day ${q.sortDay} ${q.category} ${q.hint} ${q.currentlyInGame || ''} ${
+        q.currentSource || ''
+      } ${q.fields.map(f => `${f.label} ${f.value} ${f.currentlyInGame || ''} ${f.currentSource || ''}`).join(' ')}`;
       if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
 
       const cardId = `quests_${q.id}`;
@@ -1464,7 +1639,7 @@ export default function App() {
             onClick={() => toggleCard(cardId)}
             className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
           >
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
               {expanded ? (
                 <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
               ) : (
@@ -1478,6 +1653,7 @@ export default function App() {
                 · {q.category}
               </span>
               <StatusLabel status={status} />
+              <SourceBadge badge={q.sourceBadge} />
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0 flex-wrap" onClick={e => e.stopPropagation()}>
@@ -1537,6 +1713,14 @@ export default function App() {
           {/* Card Body — Editable Metadata + Dynamic Beat Fields */}
           {expanded && (
             <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-3.5">
+              {/* Section 1 In-Game Context & Section 3 Currently In Game */}
+              <InGameContextStrip flow={q.inGameContext} />
+              <CurrentlyInGameBox
+                text={q.currentlyInGame}
+                source={q.currentSource}
+                badge={q.sourceBadge}
+              />
+
               {/* Editable Quest Metadata Grid */}
               <div className="bg-[#0f141d] border border-[#222b38] p-3 space-y-2.5">
                 <div className="flex items-center justify-between">
@@ -1608,6 +1792,7 @@ export default function App() {
                       className="w-full bg-[#0b0e13] border border-[#222b38] px-2.5 py-1 font-mono text-xs text-[#d8dee9] focus:border-[#e5a03c] focus:outline-none"
                     />
                     <datalist id="questCategoriesList">
+                      <option value="Live Covert Missions (data/covert_missions.json)" />
                       <option value="Recurring Faces" />
                       <option value="Core Side Quests" />
                       <option value="Optional / Secondary" />
@@ -1657,10 +1842,25 @@ export default function App() {
                         </button>
                       )}
                     </div>
+
+                    {f.inGameContext && <InGameContextStrip flow={f.inGameContext} />}
+
+                    <CurrentlyInGameBox
+                      text={f.currentlyInGame}
+                      source={f.currentSource || q.currentSource}
+                      badge={f.sourceBadge || q.sourceBadge}
+                      onCopyToEditor={
+                        f.currentlyInGame && !f.currentlyInGame.startsWith('(')
+                          ? () => updateQuestField(q.id, fIdx, { value: f.currentlyInGame!.replace(/^"|"$/g, '') })
+                          : undefined
+                      }
+                    />
+
                     <RaylibTextarea
                       value={f.value}
                       rows={3}
-                      softLimit={240}
+                      raylibPreset={f.raylibPreset || q.raylibPreset || 'comms_line'}
+                      softLimit={f.softLimit ?? 240}
                       limitLabel="Quest Comms / Beat"
                       ariaLabel={`${q.title} - ${f.label}`}
                       placeholder="Write quest dialogue, contract copy, or chute note here..."
@@ -1731,14 +1931,25 @@ export default function App() {
         <div className="bg-[#121720] border border-[#222b38] px-4 py-3 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="font-mono text-xs font-bold text-[#4cc9c0] tracking-wide">
-              5. RECURRING FACES & SIDE QUESTS (FULLY EDITABLE & PLAYTEST-READY)
+              5. LIVE COVERT MISSIONS, RECURRING FACES & SIDE QUESTS
             </h2>
             <p className="text-xs text-[#8492a6] mt-0.5">
-              Click any quest row to expand, edit start days (<code className="text-[#e5a03c]">1–28</code>), or add/remove dialogue beat fields.
+              Includes the 5 live <code className="text-[#52b778]">data/covert_missions.json</code> operations (21 text slots) plus all editable recurring faces and side quests.
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                downloadFile('covert_missions.json', JSON.stringify(buildCovertMissionsExport(state), null, 2));
+                showToast('Exported 1-to-1 C# data/covert_missions.json');
+              }}
+              className="px-2.5 py-1 bg-[#52b778]/15 border border-[#52b778] font-mono text-[11px] font-bold text-[#52b778] hover:bg-[#52b778] hover:text-[#0b0e13] cursor-pointer whitespace-nowrap"
+            >
+              EXPORT covert_missions.json (1-TO-1 C#)
+            </button>
+
             <div className="flex items-center bg-[#0b0e13] border border-[#263040] p-0.5">
               <button
                 type="button"
@@ -1788,7 +1999,7 @@ export default function App() {
     const visiblePosters = state.corridorPosters
       .map((p, idx) => {
         const status = getPosterStatus(p);
-        const blob = `${p.filename} ${p.stage} ${p.hint} ${p.headline} ${p.body}`;
+        const blob = `${p.filename} ${p.stage} ${p.hint} ${p.headline} ${p.body} ${p.currentlyInGame || ''} ${p.currentSource || ''}`;
         if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
         const cardId = `poster_${p.id}`;
         const expanded = isCardExpanded(cardId);
@@ -1805,7 +2016,7 @@ export default function App() {
               onClick={() => toggleCard(cardId)}
               className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
             >
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                 {expanded ? (
                   <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
                 ) : (
@@ -1816,6 +2027,7 @@ export default function App() {
                   · {p.stage}
                 </span>
                 <StatusLabel status={status} />
+                <SourceBadge badge={p.sourceBadge} />
               </div>
               <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
                 <button
@@ -1841,17 +2053,25 @@ export default function App() {
             {expanded && (
               <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-3">
                 <p className="text-xs text-[#8492a6]">{p.hint}</p>
+
+                <CurrentlyInGameBox
+                  text={p.currentlyInGame}
+                  source={p.currentSource}
+                  badge={p.sourceBadge}
+                />
+
                 <div>
                   <label className="block font-mono text-[11px] text-[#94a3b8] mb-1">
-                    Poster Headline (Bold Top Banner — Soft limit 80 chars)
+                    Poster Headline (Wall Plaque: 76px · Zoom Modal Header: 400px)
                   </label>
                   <RaylibTextarea
                     value={p.headline}
                     rows={1}
+                    raylibPreset="corridor_poster_wall"
                     softLimit={80}
                     limitLabel="Poster Headline"
                     ariaLabel={`Headline for ${p.filename}`}
-                    placeholder="e.g. PRODUCTIVITY KEEPS YOUR BERTH WARM"
+                    placeholder="e.g. WORK IS TRANSIT"
                     onFocus={el => { lastFocusedTextareaRef.current = el; }}
                     onChange={val =>
                       setState(prev => {
@@ -1864,12 +2084,13 @@ export default function App() {
                 </div>
                 <div>
                   <label className="block font-mono text-[11px] text-[#94a3b8] mb-1">
-                    Zoom-In Modal Fine Print / Body Copy
+                    Zoom-In Modal Fine Print / Body Copy (400px Box · ~42 chars/line @ +3)
                   </label>
                   <RaylibTextarea
                     value={p.body}
                     rows={3}
-                    softLimit={240}
+                    raylibPreset="corridor_poster_body"
+                    softLimit={336}
                     limitLabel="Poster Body"
                     ariaLabel={`Body copy for ${p.filename}`}
                     placeholder="Readable fine print shown when player clicks to zoom in..."
@@ -1894,7 +2115,7 @@ export default function App() {
       .map((b, idx) => {
         const status = getBarkStatus(b);
         const filled = b.lines.filter(hasText).length;
-        const blob = `${b.label} ${b.stage} ${b.lines.join(' ')}`;
+        const blob = `${b.label} ${b.stage} ${b.currentlyInGame || ''} ${b.currentSource || ''} ${b.lines.join(' ')}`;
         if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
         const cardId = `bark_${b.id}`;
         const expanded = isCardExpanded(cardId);
@@ -1911,7 +2132,7 @@ export default function App() {
               onClick={() => toggleCard(cardId)}
               className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
             >
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                 {expanded ? (
                   <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
                 ) : (
@@ -1922,6 +2143,7 @@ export default function App() {
                   · {b.stage} · {filled}/{b.lines.length} barks
                 </span>
                 <StatusLabel status={status} />
+                <SourceBadge badge={b.sourceBadge} />
               </div>
               <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                 <button
@@ -1959,7 +2181,13 @@ export default function App() {
             </div>
 
             {expanded && (
-              <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-2">
+              <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-2.5">
+                <CurrentlyInGameBox
+                  text={b.currentlyInGame}
+                  source={b.currentSource}
+                  badge={b.sourceBadge}
+                />
+
                 {b.lines.map((line, lIdx) => (
                   <div key={lIdx} className="flex items-start gap-2">
                     <span className="font-mono text-[11px] text-[#5a6678] pt-2 w-5 shrink-0 tabular-nums">
@@ -1969,8 +2197,9 @@ export default function App() {
                       <RaylibTextarea
                         value={line}
                         rows={1}
-                        softLimit={110}
-                        limitLabel="Corridor Bark"
+                        raylibPreset="corridor_bark"
+                        softLimit={68}
+                        limitLabel="Corridor Bark Speech Bubble"
                         ariaLabel={`${b.label} bark ${lIdx + 1}`}
                         placeholder="Short 1-line overhead speech bubble as 884-D walks past..."
                         onFocus={el => { lastFocusedTextareaRef.current = el; }}
@@ -2015,16 +2244,17 @@ export default function App() {
     const visibleStarSystems = state.starChart
       .map((s, idx) => {
         const status = getStarChartStatus(s);
-        const blob = `${s.name} ${s.faction} ${s.tags} ${s.exports}`;
+        const blob = `${s.name} ${s.faction} ${s.tags} ${s.exports} ${s.currentlyInGame || ''} ${s.currentSource || ''}`;
         if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
         const cardId = `sc_${s.id}`;
 
         return (
-          <div key={cardId} data-card-id={cardId} className="bg-[#121720] border border-[#222b38] p-3.5 space-y-2">
-            <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-[#1e2633]">
-              <div className="flex items-center gap-2">
+          <div key={cardId} data-card-id={cardId} className="bg-[#121720] border border-[#222b38] p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-[#1e2633] flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-mono text-xs font-bold text-[#d8dee9]">{s.name}</span>
                 <StatusLabel status={status} />
+                <SourceBadge badge={s.sourceBadge} />
               </div>
               <button
                 type="button"
@@ -2045,9 +2275,17 @@ export default function App() {
               </button>
             </div>
 
+            <CurrentlyInGameBox
+              text={s.currentlyInGame}
+              source={s.currentSource}
+              badge={s.sourceBadge}
+            />
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div>
-                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">Controlling Faction</label>
+                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">
+                  Controlling Faction (LIVE JSON)
+                </label>
                 <input
                   type="text"
                   value={s.faction}
@@ -2063,7 +2301,9 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">System Tags</label>
+                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">
+                  System Tags (NOT WIRED IN C# YET)
+                </label>
                 <input
                   type="text"
                   value={s.tags}
@@ -2079,7 +2319,9 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">Trade Exports</label>
+                <label className="block font-mono text-[10px] text-[#8492a6] mb-1">
+                  Trade Exports (NOT WIRED IN C# YET)
+                </label>
                 <input
                   type="text"
                   value={s.exports}
@@ -2107,7 +2349,7 @@ export default function App() {
             6. MORNING CORRIDOR, SECTOR MAP DATA & QUARTERS DISPATCHES
           </h2>
           <p className="text-xs text-[#8492a6] mt-0.5">
-            Zoomable morning hallway posters (<code className="text-[#4cc9c0]">corridor_posters.json</code>), overhead NPC barks (<code className="text-[#4cc9c0]">corridor_barks.json</code>), sector map system metadata (<code className="text-[#4cc9c0]">sector_map.json</code>), and overnight Kordani audits.
+            Zoomable morning hallway posters (<code className="text-[#4cc9c0]">corridor_posters.json</code>), overhead NPC barks (<code className="text-[#4cc9c0]">corridor_barks.json</code>), sector map system metadata (<code className="text-[#52b778]">data/sector_map.json</code>), and overnight Kordani audits.
           </p>
         </div>
 
@@ -2116,7 +2358,7 @@ export default function App() {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-[#222b38]">
               <h3 className="font-mono text-[11px] font-bold text-[#8492a6] uppercase tracking-wider">
-                Zoomable Wall Posters (corridor_posters.json)
+                Zoomable Wall Posters (corridor_posters.json — Currently Hardcoded in CorridorScene.cs:310-377)
               </h3>
               <button
                 type="button"
@@ -2138,7 +2380,7 @@ export default function App() {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-[#222b38]">
               <h3 className="font-mono text-[11px] font-bold text-[#8492a6] uppercase tracking-wider">
-                Proximity Overhead NPC Barks (corridor_barks.json)
+                Proximity Overhead NPC Barks (corridor_barks.json — Currently Hardcoded in CorridorScene.cs:111-118)
               </h3>
               <button
                 type="button"
@@ -2159,18 +2401,18 @@ export default function App() {
         {visibleStarSystems.length > 0 && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-[#222b38]">
-              <h3 className="font-mono text-[11px] font-bold text-[#8492a6] uppercase tracking-wider">
-                Sector Map Systems Metadata (data/sector_map.json)
+              <h3 className="font-mono text-[11px] font-bold text-[#52b778] uppercase tracking-wider">
+                Sector Map Systems Metadata (data/sector_map.json — 1-to-1 C# Schema)
               </h3>
               <button
                 type="button"
                 onClick={() => {
                   downloadFile('sector_map.json', JSON.stringify(buildSectorMapExport(state), null, 2));
-                  showToast('Exported sector_map.json');
+                  showToast('Exported 1-to-1 C# data/sector_map.json');
                 }}
-                className="px-2 py-0.5 bg-[#121720] border border-[#263040] font-mono text-[10.5px] text-[#8492a6] hover:border-[#e5a03c] hover:text-[#d8dee9] cursor-pointer"
+                className="px-2 py-0.5 bg-[#52b778]/15 border border-[#52b778] font-mono text-[10.5px] font-bold text-[#52b778] hover:bg-[#52b778] hover:text-[#0b0e13] cursor-pointer"
               >
-                EXPORT sector_map.json
+                EXPORT sector_map.json (1-TO-1 C#)
               </button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">{visibleStarSystems}</div>
@@ -2188,7 +2430,7 @@ export default function App() {
     const cards = state.endings
       .map((e, idx) => {
         const status = getEndingStatus(e);
-        const blob = `${e.title} ${e.day} ${e.category} ${e.trigger} ${e.text}`;
+        const blob = `${e.title} ${e.day} ${e.category} ${e.trigger} ${e.text} ${e.currentlyInGame || ''} ${e.currentSource || ''}`;
         if (!matchesStatusFilter(status, state.meta.filter) || !matchesSearch(blob)) return null;
         const cardId = `ending_${e.id}`;
         const expanded = isCardExpanded(cardId);
@@ -2205,7 +2447,7 @@ export default function App() {
               onClick={() => toggleCard(cardId)}
               className="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none"
             >
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                 {expanded ? (
                   <ChevronDown className="w-4 h-4 text-[#e5a03c] shrink-0" />
                 ) : (
@@ -2217,6 +2459,7 @@ export default function App() {
                   · {e.category}
                 </span>
                 <StatusLabel status={status} />
+                <SourceBadge badge={e.sourceBadge} />
               </div>
               <div className="flex items-center gap-2 shrink-0" onClick={ev => ev.stopPropagation()}>
                 <button
@@ -2240,11 +2483,29 @@ export default function App() {
             </div>
 
             {expanded && (
-              <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-2">
+              <div className="px-4 pb-4 pt-2.5 border-t border-[#1e2633] space-y-2.5">
                 <p className="text-xs text-[#8492a6]">Trigger: {e.trigger}</p>
+
+                <CurrentlyInGameBox
+                  text={e.currentlyInGame}
+                  source={e.currentSource}
+                  badge={e.sourceBadge}
+                  onCopyToEditor={
+                    e.currentlyInGame && !e.currentlyInGame.startsWith('(')
+                      ? () =>
+                          setState(prev => {
+                            const list = [...prev.endings];
+                            list[idx] = { ...list[idx], text: e.currentlyInGame! };
+                            return { ...prev, endings: list };
+                          })
+                      : undefined
+                  }
+                />
+
                 <RaylibTextarea
                   value={e.text}
                   rows={5}
+                  raylibPreset={e.raylibPreset || 'victory_ending_card'}
                   ariaLabel={`Epilogue text for ${e.title}`}
                   placeholder="Write epilogue card text (2–4 grounded paragraphs or beats matching the dry tone of the 5-Card Intro)..."
                   onFocus={el => { lastFocusedTextareaRef.current = el; }}
@@ -2267,10 +2528,10 @@ export default function App() {
       <div className="space-y-4">
         <div className="bg-[#121720] border border-[#222b38] px-4 py-3">
           <h2 className="font-mono text-xs font-bold text-[#4cc9c0] tracking-wide">
-            7. ALL 7 CAMPAIGN ENDINGS (data/endings.json)
+            7. ALL 7 CAMPAIGN ENDINGS (data/endings.json — Currently Hardcoded in BoothScene.cs:2049-2090)
           </h2>
           <p className="text-xs text-[#8492a6] mt-0.5">
-            Five Main Path endings resolving Day 28 plus two Failure endings (Security Detainment, Debt Foreclosure).
+            Five Main Path endings resolving Day 28 (currently share 1 generic victory screen in <code className="text-[#e5a03c]">BoothScene.cs:2058</code>) plus two Failure endings (Security Detainment, Debt Foreclosure).
           </p>
         </div>
         {cards.length > 0 ? (
@@ -2414,7 +2675,22 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setExportModalOpen(true)}
+            onClick={() => {
+              setExportModalInitialView('audit');
+              setExportModalOpen(true);
+            }}
+            title="View Section 5 Code vs. Workbench Sync Audit Summary"
+            className="px-2.5 py-1 bg-[#121720] border border-[#e5a03c]/60 font-mono text-[11px] font-bold text-[#e5a03c] hover:bg-[#e5a03c] hover:text-[#0b0e13] cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <FileCheck2 className="w-3.5 h-3.5" /> CODE AUDIT (SEC 5)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setExportModalInitialView('exports');
+              setExportModalOpen(true);
+            }}
             className="px-2.5 py-1 bg-[#4cc9c0]/15 border border-[#4cc9c0] font-mono text-[11px] font-bold text-[#4cc9c0] hover:bg-[#4cc9c0] hover:text-[#0b0e13] cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" /> EXPORTS & OFFLINE .HTML
@@ -2645,6 +2921,7 @@ export default function App() {
         open={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
         state={state}
+        initialView={exportModalInitialView}
         onImportFactionPoolsClick={() => importFactionPoolsInputRef.current?.click()}
         onImportBackupClick={() => importBackupInputRef.current?.click()}
         onResetDefaults={handleResetDefaults}

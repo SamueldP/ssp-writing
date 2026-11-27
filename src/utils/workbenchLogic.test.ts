@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FACTIONS,
+  EXCUSE_KEYS,
   buildDefaultState,
   getStructuredItemStatus,
   getFactionCardStatus,
@@ -11,6 +12,8 @@ import {
   executeGlobalFindReplace,
   buildFactionPoolsExport,
   applyImportedFactionPools,
+  buildForumDatabaseExport,
+  buildCovertMissionsExport,
   buildObsidianMarkdownExport,
   buildSectorMapExport,
   buildForumThreadsExport,
@@ -73,7 +76,7 @@ test('3-state status logic distinguishes TODO, DRAFT, DONE, LOCKED, and CUT (fix
   assert.equal(getFactionCardStatus(['Need to check your transponder.'], true), 'DONE');
 });
 
-test('Faction pools export & import preserves greetingsHostile and greetingsWarm', () => {
+test('Faction pools export & import preserves greetingsHostile and greetingsWarm in full workbench mode', () => {
   const state = buildDefaultState();
   state.factionPools['KDF-'].greetings = ['State your business, transport.'];
   state.factionPools['KDF-'].greetingsHostile = ['Do not test Kordani patience, Booth 04.'];
@@ -91,6 +94,78 @@ test('Faction pools export & import preserves greetingsHostile and greetingsWarm
   assert.equal(importedCount, FACTIONS.length);
   assert.deepEqual(nextState.factionPools['KDF-'].greetingsHostile, ['Do not test Kordani patience, Booth 04.']);
   assert.deepEqual(nextState.factionPools['KDF-'].greetingsWarm, ['Inspector. Always a clean lane with you on shift.']);
+});
+
+test('Strict 1-to-1 C# faction_pools.json export matches FactionDialoguePool schema (4 keys, 9 live excuse keys) and pre-populates FTV- & MNG- authored lines', () => {
+  const state = buildDefaultState();
+  // FTV- and MNG- should have their 19 verbatim authored lines pre-populated, while GUV- remains empty for user authoring
+  assert.equal(state.factionPools['FTV-'].greetings.length, 3);
+  assert.equal(state.factionPools['FTV-'].greetings[0], '{shipName} ({reg}) holding. Clear our lane.');
+  assert.equal(state.factionPools['MNG-'].greetings.length, 3);
+  assert.equal(state.factionPools['MNG-'].greetings[0], 'Guild rig {shipName} holding. Cycle our packet.');
+  assert.deepEqual(state.factionPools['GUV-'].greetings, ['', '', '']);
+
+  const strictCSharp = buildFactionPoolsExport(state, { strictCSharpSchema: true });
+  assert.equal(Object.keys(strictCSharp).length, 13);
+  const guvEntry = strictCSharp['GUV-'];
+  assert.deepEqual(Object.keys(guvEntry), ['greetings', 'excuses', 'detentionReactions', 'recentCallbacks']);
+  assert.equal('greetingsHostile' in guvEntry, false, 'Strict C# schema excludes unwired greetingsHostile');
+  assert.equal('greetingsWarm' in guvEntry, false, 'Strict C# schema excludes unwired greetingsWarm');
+  assert.equal(Object.keys(guvEntry.excuses).length, 9, 'Strict C# schema exports exact 9 live JSON excuse keys');
+  assert.equal(guvEntry.greetings[0], '[TODO: GUV- greeting 1]');
+  assert.equal(guvEntry.excuses.SpoofedWeaponsHot[0], '[TODO: GUV- SpoofedWeaponsHot excuse 1]');
+});
+
+test('1-to-1 C# forum.json and covert_missions.json exporters match exact C# classes and sanitize live leaks', () => {
+  const state = buildDefaultState();
+  const forumDb = buildForumDatabaseExport(state);
+  assert.equal(forumDb.boardName, 'VG3-NET // STATION COMMUNAL FORUM v1.4');
+  assert.ok(Array.isArray(forumDb.threads));
+  assert.ok(forumDb.threads.length >= 14);
+  const firstLiveThread = forumDb.threads.find((t: any) => t.id === 'd1_spectrometer_outage');
+  assert.ok(firstLiveThread);
+  assert.equal(firstLiveThread.minDay, 1);
+  assert.equal(firstLiveThread.posts.length, 2);
+  assert.equal(firstLiveThread.posts[0].handle, 'dock_hand_maren');
+
+  const covertDb = buildCovertMissionsExport(state);
+  assert.ok(Array.isArray(covertDb.missions));
+  assert.equal(covertDb.missions.length, 5);
+  const op1 = covertDb.missions[0];
+  assert.equal(op1.assigningFaction.includes('[TODO'), false, 'Sanitizes live [TODO] leak in assigningFaction');
+  assert.equal(op1.title.includes('[PLACEHOLDER'), false, 'Sanitizes live [PLACEHOLDER OP-01] leak');
+});
+
+test('Legacy excuse keys migrate cleanly to exact C# ShipInfractionType enum names without losing user edits', () => {
+  const v1WithLegacyExcuses = {
+    meta: {
+      corpName: 'Brengop',
+      activeTab: 'factions',
+      filter: 'all'
+    },
+    factionPools: {
+      'KDF-': {
+        greetings: ['Kordani patrol vessel on approach.'],
+        excuses: {
+          SpoofedHotWeapons: ['Our weapons bus is locked on combat standby!'],
+          WarpMismatch: ['Classified Kordani jump vector.'],
+          BioQuarantine: ['Medical supplies only.']
+        }
+      }
+    }
+  };
+
+  const migrated = migrateState(v1WithLegacyExcuses);
+  assert.deepEqual(migrated.factionPools['KDF-'].excuses.SpoofedWeaponsHot, [
+    'Our weapons bus is locked on combat standby!'
+  ]);
+  assert.deepEqual(migrated.factionPools['KDF-'].excuses.FalsifiedOriginWaveform, [
+    'Classified Kordani jump vector.'
+  ]);
+  assert.deepEqual(migrated.factionPools['KDF-'].excuses.UndeclaredCargoBioSignature, [
+    'Medical supplies only.'
+  ]);
+  assert.equal(EXCUSE_KEYS.length, 18);
 });
 
 test('Obsidian Markdown export includes greetingsHostile, greetingsWarm, recentCallbacks, quartersMisc, and quests', () => {
@@ -148,7 +223,7 @@ test('Global Find & Replace respects case-sensitivity and includeLocked toggle',
   // Add unlocked text mentioning Brengop
   state.forumThreads[0].body = 'Brengop clerks and brengop auditors are watching.';
 
-  // Locked cards (like intro_5card and day2_nixa) are not locked except intro_5card & day1_locked_pair
+  // Locked cards (like intro_5card and day1_locked_pair) are locked
   const previewNoLocked = previewGlobalFindReplace(state, {
     findText: 'Brengop',
     replaceText: 'Brusari',
@@ -186,6 +261,8 @@ test('Direct JSON exporters produce valid game-ready structures and exclude CUT 
   const sectorJson = buildSectorMapExport(state);
   assert.equal(sectorJson.systems.length, 7);
   assert.equal(sectorJson.systems[0].id, 'VG-3');
+  assert.equal(sectorJson.nodes[0].faction, '[TODO]');
+  assert.equal(sectorJson.nodes[1].faction, 'Krushvak');
 
   const forumJson = buildForumThreadsExport(state);
   assert.equal(forumJson.length, state.forumThreads.length);
@@ -196,6 +273,12 @@ test('Direct JSON exporters produce valid game-ready structures and exclude CUT 
   const endingsJson = buildEndingsExport(state);
   assert.equal(endingsJson.length, 7);
 
+  const stats = calcAllStats(state);
+  assert.equal(stats.factionPoolsLiveSlots.totalSlots, 381);
+  assert.equal(stats.factionPoolsLiveSlots.authoredSlots, 38, 'FTV- (19) + MNG- (19) = 38 authored slots in default state');
+  assert.equal(stats.factionPoolsLiveSlots.todoSlots, 343, '381 - 38 = 343 [TODO] slots in default state');
+
   const targets = collectUnfinishedTargets(state);
   assert.ok(targets.length > 10);
 });
+
